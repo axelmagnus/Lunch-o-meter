@@ -67,42 +67,119 @@ void setup() {
 
   // Setup WiFi connection
   // Enable wifi station mode (we are a client looking to connect to an access point)
-  WiFi.enableSTA(true);
+
+  /*
+  //WiFi.enableSTA(true); original
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      Serial.print("Disconnected! Reason code: ");
+      Serial.println(info.wifi_sta_disconnected.reason);
+    }
+  });
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+
+  // 2. Set the WPA2 Enterprise credentials
+  // CRITICAL: You must set the Outer Identity for WPA2-Enterprise
+  esp_eap_client_set_identity((uint8_t*)WIFI_USERNAME, strlen(WIFI_USERNAME));
 
   // Set the wpa2 enterprise credentials to use.
   esp_eap_client_set_username((uint8_t*)WIFI_USERNAME, strlen(WIFI_USERNAME));
   esp_eap_client_set_password((uint8_t*)WIFI_PASSWORD, strlen(WIFI_PASSWORD));
   tft.print("Connecting to");
   tft.println(WIFI_SSID);
-  tft.print("as user");
+  tft.print("as user: ");
   tft.println(WIFI_USERNAME);
   // Tell esp to use wpa2 enterprise to authenticate the next connection.
   esp_wifi_sta_enterprise_enable();
+  delay(100); // Give driver time to apply EAP settings
 
-  WiFi.begin(WIFI_SSID, nullptr);
+  WiFi.begin(WIFI_SSID);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
-    Serial.println("Connecting to WiFi...");
-    tft.println("Connecting to WiFi...");
+    Serial.print("Connecting to WiFi...");
+    Serial.print(WIFI_SSID);
+    Serial.print(" with user ");
+    Serial.println(WIFI_USERNAME);
+    
+    tft.print("Connecting to ");
+    tft.print(WIFI_SSID);
+    tft.print(" with user ");
+    tft.println(WIFI_USERNAME);
   }
-  Serial.println("Connected to WiFi");
+  */
+  // WiFi event debug logger
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      Serial.print("Disconnected! Reason code: ");
+      Serial.println(info.wifi_sta_disconnected.reason);
+    }
+  });
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(100);
+
+  // Native ESP32 Enterprise initialization:
+  // WiFi.begin(SSID, method, outer_identity, username, password)
+  WiFi.begin(WIFI_SSID, WPA2_AUTH_PEAP, WIFI_USERNAME, WIFI_USERNAME, WIFI_PASSWORD);
+
+
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print("Connecting to WiFi... ");
+    Serial.println(WIFI_SSID);
+    tft.print("Connecting to ");
+    tft.println(WIFI_SSID);
+  }
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
   tft.println("Connected to WiFi");
 
 
   // Initialize system time using an NTP server via configTime
   const char* ntpServer = "pool.ntp.org";
-  const long gmtOffset_sec = 7200;  // UTC+2
-  const int daylightOffset_sec = 0;
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //const long gmtOffset_sec = 7200;  // UTC+2
+  //const int daylightOffset_sec = 0;
+  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  // POSIX Timezone String for Sweden / Central European Time (Europe/Stockholm)
+  const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+  // Set timezone rules and NTP server together
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.nist.gov");
   // Wait briefly for time to be set
   Serial.println("Waiting for time sync...");
   tft.println("Waiting for time sync...");
-  for (int i = 0; i < 10 && time(nullptr) < 1600000000; ++i) {
+
+  // 3. Loop until epoch time updates past timestamp 1600000000 (Sep 2020)
+  for (int i = 0; i < 20 && time(nullptr) < 1600000000; ++i) {
     delay(500);
     Serial.print('.');
     tft.print(".");
   }
-  tft.print("Time synced");
+  tft.println();
+
+  if (time(nullptr) > 1600000000) {
+    Serial.println("\nTime successfully synchronized!");
+  } else {
+    Serial.println("\nNTP sync timed out.");
+  }
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    char dateBuffer[30];
+
+    // Format: Tuesday, Sep 01, 2026
+    strftime(dateBuffer, sizeof(dateBuffer), "%A, %b %d, %Y", &timeinfo);
+
+    Serial.print("Current Date: ");
+    Serial.println(dateBuffer);
+
+    tft.println(dateBuffer);  // Easy to print on TFT display too
+    tft.println("Waiting for daily sync..");  // Easy to print on TFT display too
+    
+  }
 
   // One-time GET to populate dagens and initial votes
   getData();
@@ -165,7 +242,7 @@ void startUpScreen() {
   u8g2_for_adafruit_gfx.print("Dags & Simbas");
   u8g2_for_adafruit_gfx.setCursor(80, 190);
   u8g2_for_adafruit_gfx.print("Gymnasiearbete");
-    u8g2_for_adafruit_gfx.setCursor(80, 250);
+  u8g2_for_adafruit_gfx.setCursor(80, 250);
   u8g2_for_adafruit_gfx.print("TE23TE");
 }
 
@@ -251,7 +328,7 @@ void welcomeScreen(const char* food) {
   // Configure qrcode generation
   qrcode.getGenerator()
     .setErrorCorrectionLevel(QRCodeECCLevel::Medium)
-    .setVersion(7); // force specific version, the QR-code version corresponds to how much information is able to be stored. The URL in this application is long and so a slightly higher QR-code is needed than if the URL had been www.google.com
+    .setVersion(7);  // force specific version, the QR-code version corresponds to how much information is able to be stored. The URL in this application is long and so a slightly higher QR-code is needed than if the URL had been www.google.com
 
   // Draw and check for errors
   String text = "https://docs.google.com/spreadsheets/d/1A9jNZFbBt8WnfRm9xxziX8ge5XegCjXRrjOzbJCytzs/edit?gid=0#gid=0";
@@ -265,44 +342,34 @@ void welcomeScreen(const char* food) {
     // - Not enough memory
   }
 }
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 void getData() {
+  // 1. Create secure client and bypass CA certificate checks
+  WiFiClientSecure client;
+  client.setInsecure();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.setTimeout(10000);        // 10 second timeout
-    http.setConnectTimeout(5000);  // 5 second connection timeout
-    http.begin(serverName);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  // 2. Initialize HTTPClient with the secure client and your server URL
+  HTTPClient http;
+
+  // Google Apps Script requires following HTTP 302/307 redirects
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  if (http.begin(client, serverName)) {
     int httpCode = http.GET();
+
     if (httpCode > 0) {
       String payload = http.getString();
-      StaticJsonDocument<1024> doc;
-      DeserializationError error = deserializeJson(doc, payload);
-      if (!error) {
-        JsonArray data = doc["data"];
-        // data[0] -> dagens
-        welcomeScreen(data[0].as<const char*>());
-        const char* d = data[0];
-        strncpy(dagens, d, sizeof(dagens) - 1);
-        dagens[sizeof(dagens) - 1] = '\0';  // Ensure null termination
-        // data[2..6] -> votes[0..4]
-        for (int vi = 0; vi < 5; ++vi) {
-          votes[vi] = data[vi + 2].as<int>();
-        }
-        Serial.print("Dagens updated: ");
-        Serial.println(dagens);
-        Serial.println("Daily update completed successfully");
-      } else {
-        Serial.print("JSON Parse failed: ");
-        Serial.println(error.f_str());
-      }
+      Serial.print("Data received: ");
+      Serial.println(payload);
     } else {
-      Serial.printf("HTTP Error: %s\n", http.errorToString(httpCode).c_str());
+      Serial.print("HTTP GET failed: ");
+      Serial.println(http.errorToString(httpCode).c_str());
     }
-    http.end();
+    http.end();  // Always close connection
   } else {
-    Serial.println("WiFi not connected - skipping getData");
+    Serial.println("Unable to initialize connection to server URL");
   }
 }
 
@@ -318,8 +385,7 @@ void sendBatchPost() {
   snprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
 
   // Build JSON array string
-  String json = "[\"" + String(dateBuf) + "\"," + String(batchVotes[0]) + "," + String(batchVotes[1]) + 
-  "," + String(batchVotes[2]) + "," + String(batchVotes[3]) + "," + String(batchVotes[4]) + "]";
+  String json = "[\"" + String(dateBuf) + "\"," + String(batchVotes[0]) + "," + String(batchVotes[1]) + "," + String(batchVotes[2]) + "," + String(batchVotes[3]) + "," + String(batchVotes[4]) + "]";
   Serial.print("Batch JSON: ");
   Serial.println(json);
 
