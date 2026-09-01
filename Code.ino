@@ -66,49 +66,7 @@ void setup() {
   tft.fillScreen(HX8357_BLACK);
 
   // Setup WiFi connection
-  // Enable wifi station mode (we are a client looking to connect to an access point)
-
-  /*
-  //WiFi.enableSTA(true); original
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-      Serial.print("Disconnected! Reason code: ");
-      Serial.println(info.wifi_sta_disconnected.reason);
-    }
-  });
-
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);
-
-  // 2. Set the WPA2 Enterprise credentials
-  // CRITICAL: You must set the Outer Identity for WPA2-Enterprise
-  esp_eap_client_set_identity((uint8_t*)WIFI_USERNAME, strlen(WIFI_USERNAME));
-
-  // Set the wpa2 enterprise credentials to use.
-  esp_eap_client_set_username((uint8_t*)WIFI_USERNAME, strlen(WIFI_USERNAME));
-  esp_eap_client_set_password((uint8_t*)WIFI_PASSWORD, strlen(WIFI_PASSWORD));
-  tft.print("Connecting to");
-  tft.println(WIFI_SSID);
-  tft.print("as user: ");
-  tft.println(WIFI_USERNAME);
-  // Tell esp to use wpa2 enterprise to authenticate the next connection.
-  esp_wifi_sta_enterprise_enable();
-  delay(100); // Give driver time to apply EAP settings
-
-  WiFi.begin(WIFI_SSID);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print("Connecting to WiFi...");
-    Serial.print(WIFI_SSID);
-    Serial.print(" with user ");
-    Serial.println(WIFI_USERNAME);
-    
-    tft.print("Connecting to ");
-    tft.print(WIFI_SSID);
-    tft.print(" with user ");
-    tft.println(WIFI_USERNAME);
-  }
-  */
+ 
   // WiFi event debug logger
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
@@ -125,8 +83,6 @@ void setup() {
   // WiFi.begin(SSID, method, outer_identity, username, password)
   WiFi.begin(WIFI_SSID, WPA2_AUTH_PEAP, WIFI_USERNAME, WIFI_USERNAME, WIFI_PASSWORD);
 
-
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.print("Connecting to WiFi... ");
@@ -138,12 +94,6 @@ void setup() {
   Serial.println(WiFi.localIP());
   tft.println("Connected to WiFi");
 
-
-  // Initialize system time using an NTP server via configTime
-  const char* ntpServer = "pool.ntp.org";
-  //const long gmtOffset_sec = 7200;  // UTC+2
-  //const int daylightOffset_sec = 0;
-  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // POSIX Timezone String for Sweden / Central European Time (Europe/Stockholm)
   const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";
 
@@ -162,8 +112,10 @@ void setup() {
   tft.println();
 
   if (time(nullptr) > 1600000000) {
+    tft.println("\nTime successfully synchronized!");
     Serial.println("\nTime successfully synchronized!");
   } else {
+    tft.println("\nNTP sync timed out.");
     Serial.println("\nNTP sync timed out.");
   }
   struct tm timeinfo;
@@ -177,7 +129,7 @@ void setup() {
     Serial.println(dateBuffer);
 
     tft.println(dateBuffer);  // Easy to print on TFT display too
-    tft.println("Waiting for daily sync..");  // Easy to print on TFT display too
+    tft.println("Waiting for daily sync @ 6 am..");  // Easy to print on TFT display too
     
   }
 
