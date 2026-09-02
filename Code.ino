@@ -9,9 +9,10 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <time.h>
-#include <esp_eap_client.h>
+//#include <esp_eap_client.h>
 #include <ArduinoJson.h>
-#include "AdafruitIO_WiFi.h"
+//#include "AdafruitIO_WiFi.h"
+#include <WiFiClientSecure.h>
 
 #define TFT_CS SS  // pin 6
 #define TFT_DC 3
@@ -35,11 +36,13 @@ int batchVotes[5] = { 0, 0, 0, 0, 0 };  // counts per label inside current batch
 int batchCount = 0;                     // total votes accumulated in current batch (max 10)
 void sendBatchPost();
 // === Daily getData scheduler ===
-// Set the time (24-hour format) when getData() should run each day
+// Set the time (24-hour format) when getData() should run each day (Obsolete)
 #define DAILY_UPDATE_HOUR 6  // Hour (0-23)
 #define DAILY_UPDATE_MIN 0   // Minute (0-59)
-// Track when getData was last ran to avoid running multiple times per day
-unsigned long lastDataUpdateTime = 0;
+
+// Track when getData was last ran to fetch once an hour and at reset
+const unsigned long UPDATE_INTERVAL_SEC = 3600;  // 1 hour in seconds
+time_t lastDataUpdateTime = 0;
 
 
 #include "credentials.h"
@@ -65,8 +68,7 @@ void setup() {
   delay(5000);
   tft.fillScreen(HX8357_BLACK);
 
-  // Setup WiFi connection
- 
+
   // WiFi event debug logger
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
@@ -94,6 +96,12 @@ void setup() {
   Serial.println(WiFi.localIP());
   tft.println("Connected to WiFi");
 
+
+  // Initialize system time using an NTP server via configTime
+  const char* ntpServer = "pool.ntp.org";
+  //const long gmtOffset_sec = 7200;  // UTC+2
+  //const int daylightOffset_sec = 0;
+  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // POSIX Timezone String for Sweden / Central European Time (Europe/Stockholm)
   const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";
 
@@ -112,10 +120,8 @@ void setup() {
   tft.println();
 
   if (time(nullptr) > 1600000000) {
-    tft.println("\nTime successfully synchronized!");
     Serial.println("\nTime successfully synchronized!");
   } else {
-    tft.println("\nNTP sync timed out.");
     Serial.println("\nNTP sync timed out.");
   }
   struct tm timeinfo;
@@ -128,20 +134,19 @@ void setup() {
     Serial.print("Current Date: ");
     Serial.println(dateBuffer);
 
-    tft.println(dateBuffer);  // Easy to print on TFT display too
-    tft.println("Waiting for daily sync @ 6 am..");  // Easy to print on TFT display too
-    
+    tft.println(dateBuffer);                 // Easy to print on TFT display too
+    tft.println("Waiting for menu sync..");  // Easy to print on TFT display too
   }
 
   // One-time GET to populate dagens and initial votes
   getData();
-  lastDataUpdateTime = time(nullptr);  // Record the initial update time
+  //lastDataUpdateTime = time(nullptr);  // Record the initial update time
 }
 
 
 void loop() {
   // Check if it's time to run daily getData update
-  checkAndRunDailyUpdate();
+  checkAndRunHourlyUpdate();
 
   // read buttonPins
   for (int i = 0; i < 5; i++) {
@@ -166,20 +171,16 @@ void loop() {
 }
 
 // === Daily scheduler helper ===
-void checkAndRunDailyUpdate() {
-  // Get current time
+void checkAndRunHourlyUpdate() {
   time_t now = time(nullptr);
-  struct tm* timeinfo = localtime(&now);
 
-  // Check if current time matches the scheduled hour and minute
-  if (timeinfo->tm_hour == DAILY_UPDATE_HOUR && timeinfo->tm_min == DAILY_UPDATE_MIN) {
-    // Check if we haven't already run getData today
-    // (lastDataUpdateTime will be earlier in the day)
-    if (now - lastDataUpdateTime > 3600) {  // More than 1 hour since last run
-      Serial.println("Running scheduled daily getData...");
-      getData();
-      lastDataUpdateTime = now;
-    }
+  // Don't run until NTP time is valid (post-2020 timestamp)
+  if (now < 1600000000) return;
+
+  // Run on first start, and then every 3,600 seconds
+  if (now - lastDataUpdateTime >= UPDATE_INTERVAL_SEC) {
+    Serial.println("Running scheduled hourly getData...");
+    getData();
   }
 }
 
@@ -294,8 +295,6 @@ void welcomeScreen(const char* food) {
     // - Not enough memory
   }
 }
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 
 void getData() {
   // 1. Create secure client and bypass CA certificate checks
@@ -315,142 +314,164 @@ void getData() {
       String payload = http.getString();
       Serial.print("Data received: ");
       Serial.println(payload);
-    } else {
-      Serial.print("HTTP GET failed: ");
-      Serial.println(http.errorToString(httpCode).c_str());
-    }
-    http.end();  // Always close connection
-  } else {
-    Serial.println("Unable to initialize connection to server URL");
-  }
-}
+      // --- PARSE JSON PAYLOAD ---
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, payload);
 
-// Send aggregated batch of votes as JSON array: ["YYYY-MM-DD",Hate,Dislike,Neutral,Like,Love]
-void sendBatchPost() {
-  if (batchCount <= 0) return;  // nothing to send
-  // build date string YYYY-MM-DD using system time
-  time_t now;
-  struct tm timeinfo;
-  char dateBuf[32] = { 0 };
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  snprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
-
-  // Build JSON array string
-  String json = "[\"" + String(dateBuf) + "\"," + String(batchVotes[0]) + "," + String(batchVotes[1]) + "," + String(batchVotes[2]) + "," + String(batchVotes[3]) + "," + String(batchVotes[4]) + "]";
-  Serial.print("Batch JSON: ");
-  Serial.println(json);
-
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(serverName);
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    http.addHeader("Content-Type", "application/json");
-    int code = http.POST(json);
-    if (code > 0) {
-      Serial.print("Batch POST response: ");
-      Serial.println(code);
-      String resp = http.getString();
-      Serial.println(resp);
-    } else {
-      Serial.print("Batch POST failed: ");
-      Serial.println(code);
-    }
-    http.end();
-  } else {
-    Serial.println("WiFi Disconnected - batch not sent");
-  }
-
-  // Clear batch
-  for (int i = 0; i < 5; ++i) batchVotes[i] = 0;
-  batchCount = 0;
-}
-
-void displayData() {
-  tft.fillScreen(HX8357_BLACK);
-  tft.setCursor(0, 0);
-  u8g2_for_adafruit_gfx.setBackgroundColor(HX8357_BLACK);
-  u8g2_for_adafruit_gfx.setForegroundColor(HX8357_WHITE);
-  u8g2_for_adafruit_gfx.setFont(u8g2_font_crox3cb_tf);
-  for (int i = 1; i < 7; i++) {
-    tft.drawFastHLine(0, i * 50 - 10, 480, HX8357_WHITE);
-    u8g2_for_adafruit_gfx.setCursor(5, i * 50 - 15);
-    u8g2_for_adafruit_gfx.print(300 - i * 50);
-  }
-  for (int i = 0; i < 5; i++) {
-    if (i == 1) {
-      u8g2_for_adafruit_gfx.setCursor(i * 90 + 30, 310);
-      u8g2_for_adafruit_gfx.print(voteLabels[i]);
-      tft.fillRect(i * 90 + 60, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
-      tft.drawRect(i * 90 + 60, 291 - votes[i], 30, votes[i], HX8357_WHITE);
-    } else if (i == 3) {
-      u8g2_for_adafruit_gfx.setCursor(i * 90 + 70, 310);
-      u8g2_for_adafruit_gfx.print(voteLabels[i]);
-      tft.fillRect(i * 90 + 80, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
-      tft.drawRect(i * 90 + 80, 291 - votes[i], 30, votes[i], HX8357_WHITE);
-    } else {
-      u8g2_for_adafruit_gfx.setCursor(i * 90 + 50, 310);
-      u8g2_for_adafruit_gfx.print(voteLabels[i]);
-      tft.fillRect(i * 90 + 60, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
-      tft.drawRect(i * 90 + 60, 291 - votes[i], 30, votes[i], HX8357_WHITE);
-    }
-  }
-  delay(3000);
-}
-
-// Wrap text into up to maxLines lines using pixel width from u8g2.
-// Returns number of lines produced (<= maxLines).
-int wrapTextToLines(const char* text, int maxWidth, String lines[], int maxLines) {
-  String s = String(text);
-  int lineCount = 0;
-  String current = "";
-
-  int pos = 0;
-  while (pos <= s.length() && lineCount < maxLines) {
-    // extract next word (space separated)
-    int next = s.indexOf(' ', pos);
-    String word;
-    if (next == -1) {
-      word = s.substring(pos);
-      pos = s.length() + 1;  // end loop
-    } else {
-      word = s.substring(pos, next);
-      pos = next + 1;
-    }
-
-    String candidate = current.length() ? (current + " " + word) : word;
-    // measure candidate width (ensure font is set on u8g2_for_adafruit_gfx before calling)
-    if (u8g2_for_adafruit_gfx.getUTF8Width(candidate.c_str()) <= maxWidth) {
-      current = candidate;
-    } else {
-      if (current.length()) {
-        lines[lineCount++] = current;
-        current = word;
-      } else {
-        // single word longer than width -> break it roughly by characters
-        String part = "";
-        for (int i = 0; i < word.length() && lineCount < maxLines; ++i) {
-          part += word[i];
-          if (u8g2_for_adafruit_gfx.getUTF8Width(part.c_str()) > maxWidth) {
-            // remove last char that overflowed
-            part.remove(part.length() - 1);
-            if (part.length()) {
-              lines[lineCount++] = part;
-            }
-            part = String(word[i]);  // start new chunk with current char
-          }
+      if (!error) {
+        // Extract food string from JSON data[0] into 'dagens'
+        const char* fetchedFood = doc["data"][0];
+        if (fetchedFood) {
+          strncpy(dagens, fetchedFood, sizeof(dagens) - 1);
+          dagens[sizeof(dagens) - 1] = '\0';  // Ensure null-termination
         }
-        // leftover from broken word becomes current
-        current = part;
+
+        // Extract vote tallies from JSON data[2] through data[6]
+        for (int i = 0; i < 5; i++) {
+          votes[i] = doc["data"][i + 2].as<int>();
+        }
+
+        // --- UPDATE TFT DISPLAY ---
+        welcomeScreen(dagens);
+        // Update timer ONLY on successful fetch
+        lastDataUpdateTime = time(nullptr);
+      } else {
+        Serial.print("HTTP GET failed: ");
+        Serial.println(http.errorToString(httpCode).c_str());
+      }
+      http.end();  // Always close connection
+    } else {
+      Serial.println("Unable to initialize connection to server URL");
+    }
+  }
+}
+
+  // Send aggregated batch of votes as JSON array: ["YYYY-MM-DD",Hate,Dislike,Neutral,Like,Love]
+  void sendBatchPost() {
+    if (batchCount <= 0) return;  // nothing to send
+    // build date string YYYY-MM-DD using system time
+    time_t now;
+    struct tm timeinfo;
+    char dateBuf[32] = { 0 };
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    snprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+
+    // Build JSON array string
+    String json = "[\"" + String(dateBuf) + "\"," + String(batchVotes[0]) + "," + String(batchVotes[1]) + "," + String(batchVotes[2]) + "," + String(batchVotes[3]) + "," + String(batchVotes[4]) + "]";
+    Serial.print("Batch JSON: ");
+    Serial.println(json);
+
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      http.begin(serverName);
+      http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+      http.addHeader("Content-Type", "application/json");
+      int code = http.POST(json);
+      if (code > 0) {
+        Serial.print("Batch POST response: ");
+        Serial.println(code);
+        String resp = http.getString();
+        Serial.println(resp);
+      } else {
+        Serial.print("Batch POST failed: ");
+        Serial.println(code);
+      }
+      http.end();
+    } else {
+      Serial.println("WiFi Disconnected - batch not sent");
+    }
+
+    // Clear batch
+    for (int i = 0; i < 5; ++i) batchVotes[i] = 0;
+    batchCount = 0;
+  }
+
+  void displayData() {
+    tft.fillScreen(HX8357_BLACK);
+    tft.setCursor(0, 0);
+    u8g2_for_adafruit_gfx.setBackgroundColor(HX8357_BLACK);
+    u8g2_for_adafruit_gfx.setForegroundColor(HX8357_WHITE);
+    u8g2_for_adafruit_gfx.setFont(u8g2_font_crox3cb_tf);
+    for (int i = 1; i < 7; i++) {
+      tft.drawFastHLine(0, i * 50 - 10, 480, HX8357_WHITE);
+      u8g2_for_adafruit_gfx.setCursor(5, i * 50 - 15);
+      u8g2_for_adafruit_gfx.print(300 - i * 50);
+    }
+    for (int i = 0; i < 5; i++) {
+      if (i == 1) {
+        u8g2_for_adafruit_gfx.setCursor(i * 90 + 30, 310);
+        u8g2_for_adafruit_gfx.print(voteLabels[i]);
+        tft.fillRect(i * 90 + 60, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
+        tft.drawRect(i * 90 + 60, 291 - votes[i], 30, votes[i], HX8357_WHITE);
+      } else if (i == 3) {
+        u8g2_for_adafruit_gfx.setCursor(i * 90 + 70, 310);
+        u8g2_for_adafruit_gfx.print(voteLabels[i]);
+        tft.fillRect(i * 90 + 80, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
+        tft.drawRect(i * 90 + 80, 291 - votes[i], 30, votes[i], HX8357_WHITE);
+      } else {
+        u8g2_for_adafruit_gfx.setCursor(i * 90 + 50, 310);
+        u8g2_for_adafruit_gfx.print(voteLabels[i]);
+        tft.fillRect(i * 90 + 60, 291 - votes[i], 30, votes[i], tft.color565(i * 50, 0, 100));
+        tft.drawRect(i * 90 + 60, 291 - votes[i], 30, votes[i], HX8357_WHITE);
+      }
+    }
+    delay(3000);
+  }
+
+  // Wrap text into up to maxLines lines using pixel width from u8g2.
+  // Returns number of lines produced (<= maxLines).
+  int wrapTextToLines(const char* text, int maxWidth, String lines[], int maxLines) {
+    String s = String(text);
+    int lineCount = 0;
+    String current = "";
+
+    int pos = 0;
+    while (pos <= s.length() && lineCount < maxLines) {
+      // extract next word (space separated)
+      int next = s.indexOf(' ', pos);
+      String word;
+      if (next == -1) {
+        word = s.substring(pos);
+        pos = s.length() + 1;  // end loop
+      } else {
+        word = s.substring(pos, next);
+        pos = next + 1;
+      }
+
+      String candidate = current.length() ? (current + " " + word) : word;
+      // measure candidate width (ensure font is set on u8g2_for_adafruit_gfx before calling)
+      if (u8g2_for_adafruit_gfx.getUTF8Width(candidate.c_str()) <= maxWidth) {
+        current = candidate;
+      } else {
+        if (current.length()) {
+          lines[lineCount++] = current;
+          current = word;
+        } else {
+          // single word longer than width -> break it roughly by characters
+          String part = "";
+          for (int i = 0; i < word.length() && lineCount < maxLines; ++i) {
+            part += word[i];
+            if (u8g2_for_adafruit_gfx.getUTF8Width(part.c_str()) > maxWidth) {
+              // remove last char that overflowed
+              part.remove(part.length() - 1);
+              if (part.length()) {
+                lines[lineCount++] = part;
+              }
+              part = String(word[i]);  // start new chunk with current char
+            }
+          }
+          // leftover from broken word becomes current
+          current = part;
+        }
+      }
+
+      // final flush if at end
+      if (pos > s.length() && lineCount < maxLines && current.length()) {
+        lines[lineCount++] = current;
+        break;
       }
     }
 
-    // final flush if at end
-    if (pos > s.length() && lineCount < maxLines && current.length()) {
-      lines[lineCount++] = current;
-      break;
-    }
+    return lineCount;
   }
-
-  return lineCount;
-}
