@@ -152,7 +152,7 @@ function updateChart() {
   // --- 1. Find the last row with data in Cols C-G ---
   const lastRow = sheet.getLastRow();
   const rawData = sheet.getRange(2, 3, lastRow - 1, 5).getValues();
-  
+  Logger.log(lastRow);
   let trueLastRow = 0;
   for (let i = rawData.length - 1; i >= 0; i--) {
     if (rawData[i].some(cell => cell !== "" && cell !== null)) {
@@ -162,6 +162,7 @@ function updateChart() {
   }
   if (trueLastRow === 0) return;
 
+  Logger.log(trueLastRow);
   // --- 2. Define the Window (Last 5 Rows) ---
   const numRowsToDisplay = 5;
   const startRow = Math.max(2, trueLastRow - numRowsToDisplay + 1);
@@ -175,13 +176,15 @@ function updateChart() {
 
   // --- 4. Get Headers from Row 1 (Columns C-G) ---
   // We read the 1st row, columns 3 to 7 (C, D, E, F, G)
-  const headers = sheet.getRange(1, 3, 1, 5).getValues()[0];
+  const headers = sheet.getRange(1, 3, 1, 6).getValues()[0];
 
   // --- 5. Build Series Options ---
   // We create an object that tells the chart: "Series 0 is named 'Temp', Series 1 is 'Humidity'..."
   const seriesOptions = {};
-  for (let i = 0; i < headers.length; i++) {
-    seriesOptions[i] = { labelInLegend: headers[i] }; // Map index to header name
+  for (let i = 0; i < headers.length-1; i++) {
+    seriesOptions[i] = 
+    { labelInLegend: headers[i]}  
+
   }
 
   // --- 6. Define Ranges ---
@@ -190,15 +193,53 @@ function updateChart() {
 
   // --- 7. Build the Bar Chart ---
   const chart = sheet.newChart()
-    .setChartType(Charts.ChartType.COLUMN)
+    .setChartType(Charts.ChartType.BAR) // Flips columns to horizontal bars
     .addRange(labelRange)
     .addRange(dataRange)
     .setPosition(2, 9, 0, 0)
-    .setOption('title', 'Sensor Data (Last 5 Entries)')
-    .setOption('legend', {position: 'right'}) // Move legend to right for better visibility
+    .setOption('width', 500)   // Set width in pixels (default is ~600)
+    .setOption('height', 380)  // Set height in pixels (default is ~371)
+    .setOption('title', 'Number of votes (Last 5 Entries)')
+    // Move Legend to the Left
+    .setOption('legend', { position: 'bottom' })    
     // Apply our custom headers here
     .setOption('series', seriesOptions) 
+
+    // Remove category gaps & expand plot area width so bars render thicker
+    .setOption('bar', { groupWidth: '100%' })
+    .setOption('chartArea', {
+      top: '10%',
+      height: '75%',    // Leaving 30% space at the bottom for X-axis labels
+      width: '55%',      // Leaving space on the right for legend
+      left: '35%'
+    })
     .build();
 
   sheet.insertChart(chart);
+    // Option 1: 100% Stacked Column Chart (Best for multi-column data C-G)
+  const chartper = sheet.newChart()
+    .setChartType(Charts.ChartType.BAR) // Flips columns to horizontal bars
+    .addRange(labelRange)
+    .addRange(dataRange)
+    .setPosition(19, 9, 0, 0) // Places chart at Column I
+    .setOption('width', 500)   // Set width in pixels (default is ~600)
+    .setOption('height', 380)  // Set height in pixels (default is ~371)
+    .setOption('title', '% of votes (Last 5 Entries)')
+        // Move Legend to the Left
+    .setOption('legend', { position: 'bottom' })  
+    .setOption('isStacked', 'percent') // Converts absolute values into 100% percentages
+    // Apply our custom headers here
+    .setOption('series', seriesOptions) 
+    // --- EXPAND X-AXIS LABEL SPACE ---
+
+    .setOption('chartArea', {
+      top: '10%',       // Distance from chart top
+      height: '75%',    // Leaving 30% space at the bottom for X-axis labels
+      width: '55%',      // Leaving space on the right for legend
+      left: '35%'
+    })
+    .build();
+
+  sheet.insertChart(chartper);
+
 }
