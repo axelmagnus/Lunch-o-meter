@@ -1,4 +1,4 @@
-# Review-Box-Capstone-Project
+# Lunch-o-meter
 <img width="5712" height="4284" alt="Image" src="https://github.com/user-attachments/assets/475a4dda-d1c4-4535-8a38-7a2283facdef" />
 
 The Review-Box is a mentometer (feedback device) specifically designed for school cafeterias. Built by Dag & Simba for their capstone project, this interactive system allows students to rate their daily meals and provides real-time feedback through an intuitive touchscreen interface. This repository contains detailed instructions and all necessary code for the project.
