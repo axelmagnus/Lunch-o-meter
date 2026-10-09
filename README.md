@@ -1,7 +1,7 @@
 # Lunch-o-meter
 <img width="5712" height="4284" alt="Image" src="https://github.com/user-attachments/assets/475a4dda-d1c4-4535-8a38-7a2283facdef" />
 
-The Review-Box is a mentometer (feedback device) specifically designed for school cafeterias. Built by Dag & Simba for their capstone project, this interactive system allows students to rate their daily meals and provides real-time feedback through an intuitive touchscreen interface. This repository contains detailed instructions and all necessary code for the project.
+The Lunch-o-meter is a mentometer (feedback device) specifically designed for school cafeterias. Built by Dag & Simba for their High school final project (and enhanced by their supervisor, me), this interactive system allows students to rate their daily meals and provides real-time feedback through an intuitive touchscreen interface. This repository contains detailed instructions and all necessary code for the project.
 
 See this link for instructions on setting up your Google Sheet: https://docs.google.com/document/d/1egwhYvs6kNeSyEP7dpBwt4Gf0NozoCYfEVu8HTmKg3k/edit?usp=sharing
 
@@ -111,14 +111,15 @@ See this link for instructions on setting up your Google Sheet: https://docs.goo
    -Approve the function to make necessary changes. And finally copy the webbapp URL into the “credentials.h” file and upload the code      to the ESP32-C5.   
 
  
-   6.**Updating the sheet for a new semester**
-   -If you want to have different sheets for different semesters, simply click the + in the bottom left corner and paste the first row      into the new sheet.
+   6.**Updating the sheet for a new year**
+   -For additional years, duplicate the tab and rename it after current year. Replace rows 2 and down.
 <img width="1440" height="900" alt="Image" src="https://github.com/user-attachments/assets/20289441-6dfa-4cef-8608-edadaa32d70a" />
 <img width="745" height="769" alt="Image" src="https://github.com/user-attachments/assets/94127cd6-113a-4c7f-a212-652eca89e5b5" />
 
-   -Finally move the sheet so that it is the first in order.
+   -Finally move the tab so that it is the first in order and activate it, so that the QR code will show the appropriate stats.
 <img width="745" height="769" alt="Image" src="https://github.com/user-attachments/assets/cdaaee51-c19d-4f91-b5bc-029512273b0b" />
-   -The script will now update the vote counts in this new sheet.
+
+   -The script update the vote counts looking up the current year.
 
 
 
