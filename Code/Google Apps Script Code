@@ -14,9 +14,9 @@ function doPost(e) {
   var votesList = [];
   if (Array.isArray(incomingData)) {
     if (Array.isArray(incomingData[0])) {
-      votesList = incomingData; // It's already a list of multiple dates
+      votesList = incomingData; // Multiple dates
     } else {
-      votesList = [incomingData]; // It's a single date, wrap it in an array
+      votesList = [incomingData]; // Single date
     }
   } else {
     return ContentService.createTextOutput("Error: Expected an array payload.");
@@ -35,11 +35,9 @@ function doPost(e) {
   }
 
   // --- Batch Fetch Data ---
-  // Read dates (Column B)
   var timestampRange = sheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
   var timestampValues = timestampRange.getValues();
 
-  // Read current vote counts (Columns C through G)
   var votesRange = sheet.getRange(startRow, 3, lastRow - startRow + 1, 5);
   var votesValues = votesRange.getValues();
 
@@ -47,7 +45,6 @@ function doPost(e) {
 
   // --- Process Incoming Arrays in Memory ---
   votesList.forEach(function(record) {
-    // Ensure the array has the expected 6 elements [Date, Hate, Dislike, Neutral, Like, Love]
     if (record.length < 6) {
       Logger.log("Skipping invalid record length: " + record);
       return; 
@@ -60,12 +57,10 @@ function doPost(e) {
     var incomingLike = parseInt(record[4]) || 0;
     var incomingLove = parseInt(record[5]) || 0;
 
-    // Search for the matching date in the fetched array
     for (var i = 0; i < timestampValues.length; i++) {
       var sheetDateVal = timestampValues[i][0];
       var sheetDateString = "";
 
-      // Safely convert Google Sheets Date objects to YYYY-MM-DD strings
       if (sheetDateVal instanceof Date) {
         sheetDateString = Utilities.formatDate(sheetDateVal, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
       } else {
@@ -73,7 +68,6 @@ function doPost(e) {
       }
 
       if (sheetDateString === incomingDate) {
-        // Add the incoming votes to the existing tallies in memory
         votesValues[i][0] = (parseInt(votesValues[i][0]) || 0) + incomingHate;    // Column C
         votesValues[i][1] = (parseInt(votesValues[i][1]) || 0) + incomingDislike; // Column D
         votesValues[i][2] = (parseInt(votesValues[i][2]) || 0) + incomingNeutral; // Column E
@@ -81,7 +75,7 @@ function doPost(e) {
         votesValues[i][4] = (parseInt(votesValues[i][4]) || 0) + incomingLove;    // Column G
         
         isDataUpdated = true;
-        break; // Stop searching once the matching date is found
+        break;
       }
     }
   });
@@ -99,41 +93,26 @@ function doGet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheets()[0];
   
-  // --- CONFIGURATION ---
-  // This format MUST match the plain text in your sheet exactly.
-  // Examples: "yyyy-MM-dd", "MM/dd/yyyy", "dd/MM/yyyy"
   const dateFormat = "yyyy-MM-dd"; 
   const timeZone = ss.getSpreadsheetTimeZone();
-  
-  // Generate "Today" as a string in that specific format
   const todayStr = Utilities.formatDate(new Date(), timeZone, dateFormat);
   
-  // --- LOGIC ---
-  // 1. Get all text from Column B
-  // Since it's plain text, getValues() returns strings, not Date objects.
   const colBValues = sheet.getRange("B:B").getValues();
-  
   let targetRow = 0;
   
-  // 2. Loop to find the match
   for (let i = 0; i < colBValues.length; i++) {
-    // Compare string to string. 
-    // We use String() and trim() to remove accidental spaces and ensure type safety.
     if (String(colBValues[i][0]).trim() === todayStr) {
-      targetRow = i + 1; // Found the row (1-indexed)
+      targetRow = i + 1;
       break; 
     }
   }
 
-  // 3. If no match found
   if (targetRow === 0) {
     return ContentService.createTextOutput(JSON.stringify({
       "status": "error", "message": "No row found for date: " + todayStr
     })).setMimeType(ContentService.MimeType.JSON);
   }
 
-  // 4. Return Data (Columns A-G)
-  // We use getDisplayValues() to ensure the microcontroller gets exactly what you see
   const rowData = sheet.getRange(targetRow, 1, 1, 7).getDisplayValues()[0];
 
   const result = {
@@ -145,101 +124,318 @@ function doGet() {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// Helper: Finds specifically the non-stacked (absolute numbers) vote chart
+function getAbsoluteVoteChart(sheet) {
+  var charts = sheet.getCharts();
+  if (charts.length === 0) return null;
+
+  var voteCharts = [];
+
+  // Identify all charts using vote columns C to G (columns 3 to 7)
+  for (var i = 0; i < charts.length; i++) {
+    var chart = charts[i];
+    var ranges = chart.getRanges();
+    for (var r = 0; r < ranges.length; r++) {
+      var startCol = ranges[r].getColumn();
+      if (startCol >= 3 && startCol <= 7) {
+        voteCharts.push(chart);
+        break;
+      }
+    }
+  }
+
+  if (voteCharts.length === 0) return charts[0];
+  if (voteCharts.length === 1) return voteCharts[0];
+
+  // Pick the chart where 'isStacked' is false, null, or 'none' (Absolute number chart)
+  for (var c = 0; c < voteCharts.length; c++) {
+    var isStacked = voteCharts[c].getOptions().get('isStacked');
+    Logger.log("Chart " + c + " isStacked setting: " + isStacked);
+    if (!isStacked || isStacked === false || isStacked === 'none' || isStacked === 'false') {
+      return voteCharts[c];
+    }
+  }
+
+  // Fallback to first vote chart if distinction cannot be determined
+  return voteCharts[0];
+}
+
 function updateChart() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheets()[0];
-  
-  // --- 1. Find the last row with data in Cols C-G ---
-  const lastRow = sheet.getLastRow();
-  const rawData = sheet.getRange(2, 3, lastRow - 1, 5).getValues();
-  Logger.log(lastRow);
-  let trueLastRow = 0;
-  for (let i = rawData.length - 1; i >= 0; i--) {
-    if (rawData[i].some(cell => cell !== "" && cell !== null)) {
-      trueLastRow = i + 2; 
+  Logger.log("=== START updateChart() ===");
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var currentYear = new Date().getFullYear().toString();
+  var sheet = ss.getSheetByName(currentYear);
+
+  if (!sheet) {
+    Logger.log("ERROR: Sheet tab '" + currentYear + "' not found!");
+    return;
+  }
+
+  // 1. Scan for last row containing vote data
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var voteData = sheet.getRange(1, 3, lastRow, 5).getValues();
+  var trueLastRow = 0;
+
+  for (var r = voteData.length - 1; r >= 0; r--) {
+    var hasVotes = voteData[r].some(function(val) {
+      return val !== "" && val !== null && !isNaN(val) && Number(val) > 0;
+    });
+    if (hasVotes) {
+      trueLastRow = r + 1;
       break;
     }
   }
-  if (trueLastRow === 0) return;
 
-  Logger.log(trueLastRow);
-  // --- 2. Define the Window (Last 5 Rows) ---
-  const numRowsToDisplay = 5;
-  const startRow = Math.max(2, trueLastRow - numRowsToDisplay + 1);
-  const rowsToGrab = (trueLastRow - startRow + 1);
+  if (trueLastRow < 2) return;
 
-  // --- 3. Clear Old Charts ---
-  const charts = sheet.getCharts();
-  for (let i = 0; i < charts.length; i++) {
-    sheet.removeChart(charts[i]);
+  // 2. Define 5-row window
+  var startRow = Math.max(2, trueLastRow - 4);
+  var rowsToGrab = trueLastRow - startRow + 1;
+
+  var labelRange = sheet.getRange(startRow, 1, rowsToGrab, 1);
+  var dataRange = sheet.getRange(startRow, 3, rowsToGrab, 5);
+
+  // 3. Update data ranges on ALL vote charts on the sheet
+  var charts = sheet.getCharts();
+  var voteChartsUpdated = 0;
+
+  for (var i = 0; i < charts.length; i++) {
+    var chart = charts[i];
+    var ranges = chart.getRanges();
+    var isVoteChart = false;
+
+    for (var r = 0; r < ranges.length; r++) {
+      var startCol = ranges[r].getColumn();
+      if (startCol >= 3 && startCol <= 7) {
+        isVoteChart = true;
+        break;
+      }
+    }
+
+    if (isVoteChart) {
+      var updated = chart.modify()
+        .clearRanges()
+        .addRange(labelRange)
+        .addRange(dataRange)
+        .build();
+      sheet.updateChart(updated);
+      voteChartsUpdated++;
+    }
   }
 
-  // --- 4. Get Headers from Row 1 (Columns C-G) ---
-  // We read the 1st row, columns 3 to 7 (C, D, E, F, G)
-  const headers = sheet.getRange(1, 3, 1, 6).getValues()[0];
-
-  // --- 5. Build Series Options ---
-  // We create an object that tells the chart: "Series 0 is named 'Temp', Series 1 is 'Humidity'..."
-  const seriesOptions = {};
-  for (let i = 0; i < headers.length-1; i++) {
-    seriesOptions[i] = 
-    { labelInLegend: headers[i]}  
-
+  if (voteChartsUpdated > 0) {
+    Logger.log("Updated " + voteChartsUpdated + " vote chart(s) for rows " + startRow + " to " + trueLastRow);
+  } else if (charts.length > 0) {
+    var updated = charts[0].modify()
+      .clearRanges()
+      .addRange(labelRange)
+      .addRange(dataRange)
+      .build();
+    sheet.updateChart(updated);
+  } else {
+    var newChart = sheet.newChart()
+      .setChartType(Charts.ChartType.BAR_HORIZONTAL)
+      .addRange(labelRange)
+      .addRange(dataRange)
+      .setPosition(2, 9, 0, 0)
+      .setOption('title', 'Senaste röster')
+      .setOption('isStacked', false)
+      .build();
+    sheet.insertChart(newChart);
+    Logger.log("New absolute vote chart created.");
   }
 
-  // --- 6. Define Ranges ---
-  const labelRange = sheet.getRange(startRow, 1, rowsToGrab, 1); // Col A (X-Axis)
-  const dataRange = sheet.getRange(startRow, 3, rowsToGrab, 5);  // Col C-G (Data)
+  SpreadsheetApp.flush();
+  Logger.log("=== END updateChart() ===");
+}
 
-  // --- 7. Build the Bar Chart ---
-  const chart = sheet.newChart()
-    .setChartType(Charts.ChartType.BAR) // Flips columns to horizontal bars
-    .addRange(labelRange)
-    .addRange(dataRange)
-    .setPosition(2, 9, 0, 0)
-    .setOption('width', 500)   // Set width in pixels (default is ~600)
-    .setOption('height', 380)  // Set height in pixels (default is ~371)
-    .setOption('title', 'Number of votes (Last 5 Entries)')
-    // Move Legend to the Left
-    .setOption('legend', { position: 'bottom' })    
-    // Apply our custom headers here
-    .setOption('series', seriesOptions) 
+function syncMenuToDoc() {
+  Logger.log("=== START syncMenuToDoc() ===");
 
-    // Remove category gaps & expand plot area width so bars render thicker
-    .setOption('bar', { groupWidth: '100%' })
-    .setOption('chartArea', {
-      top: '10%',
-      height: '75%',    // Leaving 30% space at the bottom for X-axis labels
-      width: '55%',      // Leaving space on the right for legend
-      left: '35%'
-    })
-    .build();
+  // 1. Update chart ranges in Google Sheets first
+  updateChart();
+  
+  // 2. Pause 2 seconds for Sheets backend to render the updated image
+  Utilities.sleep(2000);
 
-  sheet.insertChart(chart);
-    // Option 1: 100% Stacked Column Chart (Best for multi-column data C-G)
-  const chartper = sheet.newChart()
-    .setChartType(Charts.ChartType.BAR) // Flips columns to horizontal bars
-    .addRange(labelRange)
-    .addRange(dataRange)
-    .setPosition(19, 9, 0, 0) // Places chart at Column I
-    .setOption('width', 500)   // Set width in pixels (default is ~600)
-    .setOption('height', 380)  // Set height in pixels (default is ~371)
-    .setOption('title', '% of votes (Last 5 Entries)')
-        // Move Legend to the Left
-    .setOption('legend', { position: 'bottom' })  
-    .setOption('isStacked', 'percent') // Converts absolute values into 100% percentages
-    // Apply our custom headers here
-    .setOption('series', seriesOptions) 
-    // --- EXPAND X-AXIS LABEL SPACE ---
+  var docId = "1tgjt7wubMuEffXGrwpnk0v4eKIyUKufBaRKqHuRq8l4";
+  var doc = DocumentApp.openById(docId);
+  var body = doc.getBody();
+  var timeZone = Session.getScriptTimeZone();
+  var now = new Date();
+  
+  // Calculate Target Monday
+  var jsDay = now.getDay();
+  var daysToMonday = (jsDay === 6) ? 2 : (jsDay === 0) ? 1 : (1 - jsDay);
 
-    .setOption('chartArea', {
-      top: '10%',       // Distance from chart top
-      height: '75%',    // Leaving 30% space at the bottom for X-axis labels
-      width: '55%',      // Leaving space on the right for legend
-      left: '35%'
-    })
-    .build();
+  var targetMonday = new Date(now);
+  targetMonday.setDate(now.getDate() + daysToMonday);
+  
+  var weekNum = getISOWeek(targetMonday);
+  var yearTabName = Utilities.formatDate(targetMonday, timeZone, "yyyy");
+  
+  body.replaceText("(?i)Vecka \\d+", "Vecka " + weekNum);
 
-  sheet.insertChart(chartper);
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(yearTabName);
+  if (!sheet) {
+    Logger.log("Sheet tab '" + yearTabName + "' not found.");
+    return;
+  }
+  
+  var range = sheet.getDataRange();
+  var values = range.getValues();
+  var displayValues = range.getDisplayValues();
 
+  var dayNames = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"];
+  var menuData = [];
+
+  for (var i = 0; i < 5; i++) {
+    var currentDate = new Date(targetMonday);
+    currentDate.setDate(targetMonday.getDate() + i);
+    var targetDateStr = Utilities.formatDate(currentDate, timeZone, "yyyy-MM-dd");
+    var dishText = "Ingen meny angiven";
+    
+    for (var r = 0; r < values.length; r++) {
+      var cellVal = values[r][1];
+      if (!cellVal) continue;
+      
+      var formattedCellDate = "";
+      if (cellVal instanceof Date) {
+        formattedCellDate = Utilities.formatDate(cellVal, timeZone, "yyyy-MM-dd");
+      } else {
+        formattedCellDate = cellVal.toString().trim().substring(0, 10);
+      }
+      
+      if (formattedCellDate === targetDateStr) {
+        dishText = displayValues[r][0] || "Ingen meny";
+        break;
+      }
+    }
+    
+    menuData.push([dayNames[i] + " (" + targetDateStr + ")", dishText]);
+  }
+
+  // Update Menu Table
+  var tables = body.getTables();
+  if (tables.length > 0) {
+    var table = tables[0];
+    for (var k = 0; k < menuData.length; k++) {
+      var row = table.getRow(k + 1);
+      row.getCell(0).setText(menuData[k][0]);
+      row.getCell(1).setText(menuData[k][1]);
+    }
+  }
+
+  // 7. Extract Absolute Chart PNG and Replace Image in Doc
+  var targetSheetChart = getAbsoluteVoteChart(sheet);
+
+  if (targetSheetChart) {
+    var chartBlob = targetSheetChart.getAs('image/png');
+    replaceChartImageInDoc(body, chartBlob);
+  }
+
+  // 8. Update Timestamp
+  var timestamp = Utilities.formatDate(now, timeZone, "yyyy-MM-dd HH:mm");
+  var statusText = "Senast uppdaterad: " + timestamp;
+
+  var searchResult = body.findText("Senast uppdaterad:");
+  if (searchResult) {
+    body.replaceText("Senast uppdaterad:.*", statusText);
+  } else {
+    body.appendParagraph(statusText).setItalic(true);
+  }
+
+  doc.saveAndClose();
+  Logger.log("=== END syncMenuToDoc() ===");
+}
+
+function replaceChartImageInDoc(body, chartBlob) {
+  // 1. Search for InlineImages tagged with Alt Title "ChartImage"
+  var inlineImages = body.getImages();
+  for (var i = 0; i < inlineImages.length; i++) {
+    var img = inlineImages[i];
+    if (typeof img.getAltTitle === 'function' && img.getAltTitle() === "ChartImage") {
+      var width = img.getWidth() || 360;
+      var height = img.getHeight() || 250;
+      var para = img.getParent().asParagraph();
+      var idx = para.getChildIndex(img);
+      img.removeFromParent();
+
+      var newImg = para.insertInlineImage(idx, chartBlob);
+      newImg.setAltTitle("ChartImage");
+      newImg.setWidth(width);
+      newImg.setHeight(height);
+      Logger.log("Inline chart image replaced successfully.");
+      return;
+    }
+  }
+
+  // 2. Search for PositionedImages (Wrap Text / Break Text)
+  var paragraphs = body.getParagraphs();
+  var positionedList = [];
+
+  for (var p = 0; p < paragraphs.length; p++) {
+    var posImgs = paragraphs[p].getPositionedImages();
+    for (var pi = 0; pi < posImgs.length; pi++) {
+      positionedList.push({
+        image: posImgs[pi],
+        paragraph: paragraphs[p]
+      });
+    }
+  }
+
+  if (positionedList.length === 0) {
+    Logger.log("WARNING: No chart image container found to replace.");
+    return;
+  }
+
+  // Target the rightmost positioned image (highest leftOffset)
+  positionedList.sort(function(a, b) {
+    return b.image.getLeftOffset() - a.image.getLeftOffset();
+  });
+
+  var target = positionedList[0];
+  var posImg = target.image;
+  var para = target.paragraph;
+
+  var width = posImg.getWidth();
+  var height = posImg.getHeight();
+  var layout = posImg.getLayout();
+  var leftOffset = posImg.getLeftOffset();
+  var topOffset = posImg.getTopOffset();
+
+  para.removePositionedImage(posImg.getId());
+  var newPosImg = para.addPositionedImage(chartBlob);
+  newPosImg.setWidth(width)
+           .setHeight(height)
+           .setLayout(layout)
+           .setLeftOffset(leftOffset)
+           .setTopOffset(topOffset);
+
+  Logger.log("Absolute number chart replaced successfully in Google Doc.");
+}
+
+// Helper: Calculates standard Swedish/ISO-8601 week number
+function getISOWeek(date) {
+  var d = new Date(date.getTime());
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+  var week1 = new Date(d.getFullYear(), 0, 4);
+  return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+}
+
+// Triggered on edit — restricts execution to Column A and B on 4-digit year tabs
+function autoSyncOnEdit(e) {
+  if (!e || !e.range) return;
+  
+  var sheet = e.range.getSheet();
+  if (!sheet.getName().match(/^\d{4}$/)) return;
+  
+  var col = e.range.getColumn();
+  if (col > 2) return;
+
+  syncMenuToDoc();
 }
